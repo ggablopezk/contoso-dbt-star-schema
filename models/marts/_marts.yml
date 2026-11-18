@@ -1,0 +1,131 @@
+
+version: 2
+
+models:
+  - name: dim_customer
+    description: "Dimension table. One line for each unique customer."
+    columns:
+      - name: customerkey
+        description: "Unique customer identifier."
+        data_tests: [unique, not_null]
+      - name: current_age
+        description: > 
+                      Completed years of age as of today (age(current_date, birthday)). 
+                      Changes every time the model is rebuilt.
+                      For the age at purchase time use fct_sales.customer_age_at_order.
+      - name: age_group
+        description: "Age band based on current_age (not age at purchase): -18, 8-year bands from 18-25 to 58-65, and +66. No data when birthday is missing."
+      - name: country
+        description: "Country where the customer lives (residence, not nationality)."
+
+  - name: dim_product
+    description: "Dimension table. One line for each unique product."
+    columns:
+      - name: productkey
+        description: "Unique product identifier."
+        data_tests: [unique, not_null]
+      - name: unit_margin
+        description: "price - cost, in USD. Uses the list price (before discount), so it is the theoretical margin, not the real profit of each sale (see fct_sales.profit_amount_usd)."
+      - name: unit_margin_pct
+        description: "Margin as a ratio of price: (price - cost) / price, rounded to 2 decimals (0.45 = 45%). Null when price is 0."
+
+
+  - name: dim_store
+    description: "Dimension table. One line for each unique store."
+    columns:
+      - name: storekey
+        description: "Unique store identifier."
+        data_tests: [unique, not_null]
+      - name: is_open
+        description: "True when closedate is null. Based on closedate instead of status because status is not reliable (store 630 has a closedate but an empty status)."
+      - name: status
+        description: "Store status from the source. Empty means open, but it is not kept up to date: use is_open instead."
+      
+
+  - name: dim_date
+    description: "Dimension table. One line for each date from 01/01/2015 to 31/12/2024."
+    columns:
+      - name: date
+        description: "Unique date identifier."
+        data_tests: [unique, not_null]
+      - name: is_weekend
+        description: "Saturday and Sunday are considered weekend days."
+
+
+  - name: fct_sales
+    description: >
+      Sales fact table. One row per order line (grain: orderkey + linenumber).
+      Built from stg_sales, enriched with customer age at order time.
+      Prices and amounts are in USD (verified: the same product has the same
+      price regardless of the sale currency). exchangerate converts USD to the
+      customer's local currency.
+    columns:
+      # grain
+      - name: orderkey
+        description: "Order identifier. One order can have several lines."
+        data_tests: [not_null]
+      - name: linenumber
+        description: "Line number within the order. Unique together with orderkey."
+        data_tests: [not_null]
+
+      # foreign keys
+      - name: customerkey
+        description: "Customer who placed the order. FK to dim_customer."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customerkey
+      - name: productkey
+        description: "Product sold in this line. FK to dim_product."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_product')
+                field: productkey
+      - name: storekey
+        description: "Store where the sale happened. FK to dim_store."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_store')
+                field: storekey
+      - name: orderdate
+        description: "Date of the order. FK to dim_date (date)."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date
+
+      # base measures (USD)
+      - name: quantity
+        description: "Units sold in this line."
+      - name: unitprice
+        description: "List price per unit at the time of sale, before discount, in USD."
+      - name: netprice
+        description: "Price per unit after discount, in USD. Always <= unitprice (~62% of lines have a discount)."
+      - name: unitcost
+        description: "Cost per unit, in USD."
+
+      # currency
+      - name: currencycode
+        description: "Currency the customer paid in (USD, EUR, GBP, AUD, CAD)."
+      - name: exchangerate
+        description: "Rate from USD to currencycode at the time of sale (1 USD = exchangerate units of local currency). Always 1 for USD."
+
+      # amounts (USD)
+      - name: gross_sale_amount_usd
+        description: "quantity * unitprice. Line amount at list price, before discount, in USD."
+      - name: net_sale_amount_usd
+        description: "quantity * netprice. Amount actually charged for the line, in USD. Safe to sum across currencies."
+      - name: total_cost_amount_usd
+        description: "quantity * unitcost. Total cost of the line, in USD."
+      - name: profit_amount_usd
+        description: "net_sale_amount_usd - total_cost_amount_usd. Profit of the line, in USD."
+      - name: net_sale_amount_local
+        description: "net_sale_amount_usd * exchangerate. What the customer paid in their own currency. Do NOT sum across currencies."
+
+      # age
+      - name: customer_age_at_order
+        description: "Customer age in years on the order date. Not the current age (see dim_customer.current_age)."

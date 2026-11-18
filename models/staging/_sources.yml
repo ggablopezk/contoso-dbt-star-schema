@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: contoso   
+    schema: public       
+    tables:
+      - name: sales
+      - name: customer
+      - name: product
+      - name: store
+      - name: date
+      - name: currencyexchange
