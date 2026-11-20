@@ -1,66 +1,65 @@
-# Ventas de Contoso: de tablas crudas a un esquema estrella con dbt
+# Contoso Sales: from raw tables to a star schema with dbt
 
+*Leer en español: [README.es.md](README.es.md)*
 
-Este es mi primer proyecto con **dbt**. Lo diseñé con un alcance acotado y sencillo a propósito. La idea no era construir algo complejo, sino entender los fundamentos de la herramienta y compararlos con mi forma habitual de trabajar.
+This is my first project with **dbt**. I deliberately kept the scope small and simple. The goal was not to build something complex, but to understand the fundamentals of the tool and compare them with the way I usually work.
 
-En mi trabajo como analista de datos armo y mantengo una base en PostgreSQL con vistas y vistas materializadas. Funciona, pero la lógica queda repartida entre distintas vistas y en lo que yo sé sobre cómo dependen unas de otras. Si un número sale mal, tengo que rastrear a mano qué vista alimenta a cuál. Las verificaciones las hago con consultas sueltas, sin nada que garantice que se corran siempre. Lo que quería ver con dbt es si ese mismo trabajo se puede hacer con más transparencia, más auditabilidad y más control sobre los errores.
+In my job as a data analyst I build and maintain a PostgreSQL database with views and materialized views. It works, but the logic ends up spread across different views and in what I know about how they depend on each other. If a number comes out wrong, I have to trace by hand which view feeds which. I run checks as standalone queries, with nothing guaranteeing they always get run. With dbt I wanted to see whether the same work could be done with more transparency, more auditability and more control over errors.
 
-## El punto de partida
+## Starting point
 
-Usé el dataset de ejemplo **Contoso** (una empresa ficticia de retail), cargado en mi PostgreSQL local. La versión que usé (`contoso_100k`) es la que comparte Luke Barousse en su curso gratuito [Intermediate SQL for Data Analytics](https://github.com/lukebarousse/Int_SQL_Data_Analytics_Course) ([descarga](https://github.com/lukebarousse/Int_SQL_Data_Analytics_Course/releases/tag/v.0.0.0)). Los datos no están incluidos en este repositorio.
+I used the **Contoso** sample dataset (a fictional retail company), loaded into my local PostgreSQL. The version I used (`contoso_100k`) is the one Luke Barousse shares in his free course [Intermediate SQL for Data Analytics](https://github.com/lukebarousse/Int_SQL_Data_Analytics_Course) ([download](https://github.com/lukebarousse/Int_SQL_Data_Analytics_Course/releases/tag/v.0.0.0)). The data is not included in this repository.
 
-Tiene seis tablas. La de ventas contiene cada línea de cada pedido, con cantidades, precios, descuentos, moneda y fechas. Las otras cinco describen a los clientes, productos, tiendas y fechas, y guardan los tipos de cambio entre monedas.
+It has six tables. The sales table holds every line of every order, with quantities, prices, discounts, currency and dates. The other five describe customers, products, stores and dates, and store exchange rates between currencies.
 
-Para darle sentido, me imaginé un escenario: soy el responsable de datos de Contoso y el equipo comercial me pregunta cosas como estas:
+To give it a purpose, I imagined a scenario: I am the data person at Contoso, and the sales team asks me things like:
 
-- ¿Cuánto vendimos por país y por año, en dólares?
-- ¿Qué categorías de producto dejan más ganancia?
-- ¿Cuánta plata resignamos en descuentos?
-- ¿Qué rango de edad compra más?
+- How much did we sell by country and year, in dollars?
+- Which product categories generate the most profit?
+- How much revenue do we give up in discounts?
+- Which age group buys the most?
 
-Para contestar cualquiera de ellas sobre las tablas crudas, hay que adivinar cómo unirlas y esperar que el JOIN no duplique filas. **Mi objetivo no era responder las preguntas**, sino dejar las tablas listas para que responderlas sea fácil y seguro, para mí o para otros.
+To answer any of these on the raw tables, you have to guess how to join them and hope the JOIN doesn't duplicate rows. **My goal was not to answer the questions**, but to get the tables ready so that answering them is easy and safe, for me or for anyone else.
 
-## El mapa
+## The map
 
 ```
- FUENTES                  STAGING                 MARTS                   CONSUMO
- (public)               (estandarizar)         (modelo dimensional)     (análisis)
- sales              ──→    stg_sales       ──→    fct_sales       ──→    consultas
+ SOURCES                  STAGING                 MARTS                   CONSUMPTION
+ (public)               (standardize)          (dimensional model)      (analysis)
+ sales              ──→    stg_sales       ──→    fct_sales       ──→    queries
  customer           ──→    stg_customer    ──→    dim_customer    ──→    dashboards
  product            ──→    stg_product     ──→    dim_product
  store              ──→    stg_store       ──→    dim_store
  date               ──→    stg_date        ──→    dim_date
- currencyexchange   ─→     stg_exchange
+ currencyexchange   ──→    stg_exchange
 
-        TESTS: verifican condiciones sobre los datos cada vez que se construye el proyecto
-        DOCS:  describen cada modelo y columna, con el grafo de dependencias
-        GIT:   guarda el historial de cambios
+        TESTS: check conditions on the data every time the project is built
+        DOCS:  describe every model and column, with the dependency graph
+        GIT:   keeps the history of changes
 ```
 
-Las tablas originales quedan en el schema `public` y nunca se modifican. Todo lo que construye dbt va a un schema aparte (`dbt_dev`).
+The original tables stay in the `public` schema and are never modified. Everything dbt builds goes to a separate schema (`dbt_dev`).
 
-Lo que me permite dbt es transformar datos mediante modelos escritos en archivos SQL. Cada modelo es un `SELECT`, y dbt se encarga de crearlo como vista o tabla y de ejecutarlos en el orden correcto, porque sabe qué modelo depende de cuál. Además permite sumar tests automáticos y generar documentación.
+What dbt lets me do is transform data through models written as SQL files. Each model is a `SELECT`, and dbt takes care of creating it as a view or a table and running them in the right order, because it knows which model depends on which. It also lets you add automated tests and generate documentation.
 
-## Cómo lo fui armando
+## How I built it
 
-### 1. Primero, en papel
+### 1. First, on paper
 
-Antes de escribir una línea, me senté a entender los datos. La primera pregunta para cada tabla fue: **¿qué representa exactamente una fila?** En modelado de datos esto se llama el *grano* de la tabla. Lo verifiqué con consultas SQL, no solo mirando los datos:
+Before writing a single line, I sat down to understand the data. The first question for each table was: **what exactly does one row represent?** In data modeling this is called the table's *grain*. I verified it with SQL queries, not just by looking at the data:
 
-| Tabla | Una fila es... | Clave de identificación |
+| Table | One row is... | Identifying key |
 |---|---|---|
-| sales | una línea de un pedido | `orderkey` + `linenumber` |
-| customer | un cliente | `customerkey` |
-| product | un producto | `productkey` |
-| store | una tienda | `storekey` |
-| date | un día | `date` |
-| currencyexchange | el tipo de cambio entre dos monedas en un día | `date` + `fromcurrency` + `tocurrency` |
+| sales | one line of an order | `orderkey` + `linenumber` |
+| customer | one customer | `customerkey` |
+| product | one product | `productkey` |
+| store | one store | `storekey` |
+| date | one day | `date` |
+| currencyexchange | the exchange rate between two currencies on one day | `date` + `fromcurrency` + `tocurrency` |
 
-Parece un detalle, pero es lo que evita el error más caro y más silencioso en datos: un JOIN que duplica filas e infla los totales sin que nadie lo note.
+It looks like a detail, but it is what prevents the most expensive and most silent error in data: a JOIN that duplicates rows and inflates totals without anyone noticing.
 
-
-Con eso dibujé la **estrella**: las ventas en el centro (los *hechos*, lo que se mide y se suma) y alrededor las *dimensiones*, que describen el quién, qué, dónde y cuándo. Cada venta tiene un cliente, un producto, una tienda y una fecha; cada cliente, producto, tienda o fecha puede aparecer en muchas ventas.
-
+With that I drew the **star**: sales in the center (the *facts*, what gets measured and summed) and around it the *dimensions*, which describe the who, what, where and when. Each sale has one customer, one product, one store and one date; each customer, product, store or date can appear in many sales.
 
 ```mermaid
 erDiagram
@@ -70,118 +69,116 @@ erDiagram
     fct_sales }o--|| dim_date     : "orderdate = date"
 ```
 
-### 2. Las herramientas
+### 2. The tools
 
-- **PostgreSQL:** guarda las tablas originales y los modelos que genera dbt.
-- **dbt:** define, construye, prueba y documenta las transformaciones.
-- **Python:** solo para crear un entorno aislado e instalar dbt.
-- **VS Code:** para editar los archivos SQL y de configuración.
+- **PostgreSQL:** stores the original tables and the models dbt generates.
+- **dbt:** defines, builds, tests and documents the transformations.
+- **Python:** only to create an isolated environment and install dbt.
+- **VS Code:** to edit the SQL and configuration files.
 
+### 3. Staging: a standardized layer
 
-### 3. Staging: una capa estandarizada
+I created one staging model for each original table. In this layer I kept the same grain and the same row count as the source, with no joins or filters: I only selected, ordered and standardized columns. It is little work, but it separates the raw data from what gets used, and if a source changes tomorrow, the fix is made in one place.
 
-Creé un modelo de staging por cada tabla original. En esta capa mantuve el mismo grano y la misma cantidad de filas que la fuente, sin joins ni filtros: solo seleccioné, ordené y estandaricé columnas. Es poco trabajo, pero separa lo crudo de lo que se usa, y si mañana cambia una fuente, el ajuste se hace en un solo lugar.
+### 4. Marts: the star
 
-### 4. Marts: la estrella
+On top of staging I built the four dimensions and the fact table. I materialized them as tables rather than views: they are what people will query, so it makes sense to have them computed and ready instead of recalculating joins and derived columns on every query.
 
-Sobre staging construí las cuatro dimensiones y la tabla de hechos. Las guardé como tablas y no como vistas: son las que se van a consultar, así que conviene que estén calculadas y listas, en lugar de recalcular los joins y las columnas derivadas en cada consulta.
-
-| Modelo | Una fila es... | Filas |
+| Model | One row is... | Rows |
 |---|---|---|
-| `fct_sales` | una línea de un pedido | 199.873 |
-| `dim_customer` | un cliente | 104.990 |
-| `dim_product` | un producto | 2.517 |
-| `dim_store` | una tienda | 74 |
-| `dim_date` | un día, de 2015 a 2024 | 3.653 |
+| `fct_sales` | one line of an order | 199,873 |
+| `dim_customer` | one customer | 104,990 |
+| `dim_product` | one product | 2,517 |
+| `dim_store` | one store | 74 |
+| `dim_date` | one day, from 2015 to 2024 | 3,653 |
 
-`fct_sales` tiene exactamente las mismas filas que la tabla de ventas original: el grano se mantuvo.
+`fct_sales` has exactly the same rows as the original sales table: the grain was preserved.
 
-Este es el grafo que genera dbt a partir de las referencias entre modelos:
+This is the graph dbt generates from the references between models:
 
-![Grafo de dependencias](docs/lineage_graph.png)
+![Dependency graph](docs/lineage_graph.png)
 
-Muestra las dependencias de izquierda a derecha: en verde las fuentes, después staging y la estrella. A la derecha aparecen los tests que escribí a mano, conectados a los modelos que verifican.
+It shows dependencies from left to right: sources in green, then staging and the star. On the right are the tests I wrote by hand, connected to the models they check.
 
-### 5. Lo que encontré en los datos
+### 5. What I found in the data
 
-Esta fue la parte más interesante. Al mirar los datos de cerca aparecieron cosas que no esperaba:
+This was the most interesting part. Looking at the data closely, things I didn't expect showed up:
 
-- **Los precios ya estaban en dólares.** Empecé asumiendo que cada venta estaba en la moneda del cliente. Lo verifiqué y el mismo producto tiene el mismo precio sin importar la moneda de la venta, y el tipo de cambio que trae cada venta (el del día en que se hizo) va de USD a la moneda local. Por eso los montos en dólares llevan el sufijo `_usd` y se pueden sumar entre países. Agregué además una columna con el monto en moneda local, documentada para que no se sume entre países con monedas distintas.
-- **`netprice` es el precio unitario con descuento.** Comparándolo con el precio de lista, nunca es mayor, y alrededor del 62% de las líneas de pedido tiene algún descuento.
-- **El estado de las tiendas no es confiable.** Un estado vacío suele significar "abierta", pero hay excepciones: la tienda 630 tiene fecha de cierre y el estado vacío. Por eso, para saber si una tienda está abierta, usé la fecha de cierre y no el estado. Los datos originales no los modifiqué: lo resolví en el modelo y lo dejé documentado.
+- **Prices were already in dollars.** I started by assuming each sale was in the customer's currency. I checked it: the same product has the same price regardless of the sale's currency, and the exchange rate stored with each sale (the one for the day it was made) goes from USD to the local currency. That's why dollar amounts carry the `_usd` suffix and can be summed across countries. I also added a column with the amount in local currency, documented so that it is not summed across countries with different currencies.
+- **`netprice` is the unit price after discount.** Compared with the list price, it is never higher, and about 62% of order lines have some discount.
+- **Store status is not reliable.** An empty status usually means "open", but there are exceptions: store 630 has a close date and an empty status. So, to know whether a store is open, I used the close date instead of the status. I didn't modify the original data: I solved it in the model and documented it.
 
-### 6. Tests: las verificaciones que antes hacía a mano
+### 6. Tests: the checks I used to do by hand
 
-Acá está la diferencia más grande con mi forma de trabajar habitual. Las comprobaciones que antes corría sueltas ahora están escritas una sola vez en el proyecto, y `dbt build` las ejecuta cada vez que lo reconstruye: **18 tests** en total. Si un día llegan datos que no cumplen alguna de esas condiciones, dbt lo marca antes de que el número llegue a un informe.
+This is the biggest difference from my usual way of working. The checks I used to run as standalone queries are now written once in the project, and `dbt build` runs them every time it rebuilds it: **18 tests** in total. If one day data arrives that breaks any of those conditions, dbt flags it before the number reaches a report.
 
-| Tipo de control | Qué verifica |
+| Type of check | What it verifies |
 |---|---|
-| Unicidad | Que no se repitan las claves de las dimensiones ni las líneas de pedido. |
-| Completitud | Que las claves de las dimensiones y de cada línea de pedido no estén vacías. |
-| Integridad | Que cada venta apunte a un cliente, producto, tienda y fecha que existan. |
-| Reglas de negocio | Que el precio con descuento nunca supere al de lista, que no haya ventas fuera del período en que la tienda estuvo abierta y que nada se entregue antes de pedirse. |
+| Uniqueness | That dimension keys and order lines are not repeated. |
+| Completeness | That the keys of the dimensions and of each order line are not empty. |
+| Integrity | That every sale points to a customer, product, store and date that exist. |
+| Business rules | That the discounted price never exceeds the list price, that there are no sales outside the period the store was open, and that nothing is delivered before it is ordered. |
 
-### 7. Documentación
+### 7. Documentation
 
-Documenté los modelos y las columnas que hacen falta para interpretar bien los datos, con descripciones escritas junto al código. Con eso dbt genera una página navegable con el grafo de arriba. La idea es que alguien que no me conoce pueda usar las tablas sin preguntarme qué significa cada columna; por ejemplo, la diferencia entre la edad actual de un cliente y la que tenía cuando compró.
+I documented the models and the columns needed to interpret the data correctly, with descriptions written next to the code. From that, dbt generates a browsable site with the graph above. The idea is that someone who doesn't know me can use the tables without asking me what each column means; for example, the difference between a customer's current age and the age they had when they bought.
 
-### 8. Las preguntas, respondidas
+### 8. The questions, answered
 
-Para probar que la estrella sirve, respondí las cuatro preguntas del escenario con consultas cortas sobre los modelos finales: la tabla de hechos, una o dos dimensiones y un `GROUP BY`, sin reconstruir relaciones desde las tablas originales. Están en `analyses/`.
+To prove the star works, I answered the four questions from the scenario with short queries on the final models: the fact table, one or two dimensions and a `GROUP BY`, without rebuilding relationships from the original tables. They are in `analyses/`.
 
-| Pregunta | Cómo la medí | Resultado |
+| Question | How I measured it | Result |
 |---|---|---|
-| Ventas por país y año | Venta neta en USD, por país de la tienda | Estados Unidos lidera entre las tiendas físicas, pero desde 2021 la tienda **online** es el canal que más vende (en 2022 facturó más del doble que Estados Unidos). Todos los países caen en 2020. |
-| Categorías con más ganancia | (Precio con descuento − costo) × cantidad, en USD | **Computers** deja el 44% de la ganancia total (USD 50,2 M de 114 M). El margen es parecido en todas las categorías (52% a 59%): la diferencia la hace el volumen, no el margen. |
-| Plata resignada en descuentos | Venta a precio de lista − venta neta, en USD y como proporción | USD 12,95 M en total. El descuento se mantiene estable en torno al **6%** de la venta a precio de lista todos los años. |
-| Rango de edad que más compra | Venta neta en USD y clientes distintos, según la edad al comprar | "+66" aparece primero, pero es el único rango abierto y abarca muchos más años que los demás. Comparando rangos del mismo ancho (8 años), las ventas son parecidas (entre USD 20 M y 25 M cada uno): **ninguna edad se destaca**. |
+| Sales by country and year | Net sales in USD, by store country | The United States leads among physical stores, but since 2021 the **online** store is the channel that sells the most (in 2022 it sold more than twice as much as the United States). All countries drop in 2020. |
+| Categories with the most profit | (Discounted price − cost) × quantity, in USD | **Computers** brings in 44% of total profit (USD 50.2M of 114M). Margins are similar across categories (52% to 59%): volume makes the difference, not margin. |
+| Revenue given up in discounts | List-price sales − net sales, in USD and as a ratio | USD 12.95M in total. Discounts stay steady at around **6%** of list-price sales every year. |
+| Age group that buys the most | Net sales in USD and distinct customers, by age at purchase | "+66" comes first, but it is the only open-ended group and spans many more years than the others. Comparing groups of the same width (8 years), sales are similar (between USD 20M and 25M each): **no age group stands out**. |
 
-Dos cosas que aparecieron al responderlas:
+Two things came up while answering them:
 
-- La tienda online figura en `dim_store` con el país "Online". Por eso aparece como un "país" más en la primera consulta. Lo dejé así porque muestra el peso del canal online, pero vale tenerlo en cuenta al leer ventas por país.
-- Los rangos de edad tienen que tener el mismo ancho para poder compararlos. Un rango abierto como "+66" puede parecer el más importante solo porque junta más edades.
+- The online store appears in `dim_store` with the country "Online". That's why it shows up as one more "country" in the first query. I left it that way because it shows the weight of the online channel, but it is worth keeping in mind when reading sales by country.
+- Age groups need to have the same width to be compared. An open-ended group like "+66" can look like the most important one just because it covers more ages.
 
-## Resultado del proyecto
+## Project outcome
 
-- Una capa staging que estandariza las seis tablas originales.
-- Un esquema estrella con una tabla de hechos y cuatro dimensiones.
-- 18 tests automáticos de unicidad, completitud, integridad y reglas de negocio.
-- Documentación de modelos y columnas, con el grafo de dependencias.
-- Cuatro consultas que responden preguntas de negocio usando solo la estrella.
-- Todo versionado con Git.
+- A staging layer that standardizes the six original tables.
+- A star schema with one fact table and four dimensions.
+- 18 automated tests for uniqueness, completeness, integrity and business rules.
+- Documentation of models and columns, with the dependency graph.
+- Four queries that answer business questions using only the star.
+- Everything versioned with Git.
 
-## Decisiones de modelado
+## Modeling decisions
 
-| Decisión | Por qué |
+| Decision | Why |
 |---|---|
-| Grano de `fct_sales` = línea de pedido | Mantener el nivel de detalle original y no duplicar montos. |
-| Nombres de claves de la fuente (`customerkey`...) en todas las capas | Poder rastrear cualquier columna hasta su origen. |
-| Montos con sufijo `_usd` y moneda local aparte | Que el nombre avise qué se puede sumar y qué no. |
-| Edad actual en `dim_customer`, edad al comprar en `fct_sales` | Son preguntas distintas: quién es el cliente hoy y quién era cuando compró. |
-| Tienda abierta = sin fecha de cierre | El campo de estado tiene inconsistencias. |
-| Marts como tablas, staging como vistas | Staging es un paso intermedio; los marts son lo que se consulta. |
-| Datos originales sin modificar | Los problemas se resuelven en dbt y quedan documentados. |
-| `stg_exchange` se mantiene aunque hoy no se usa | Deja disponible la fuente para un posible análisis cambiario futuro. |
+| Grain of `fct_sales` = order line | Keep the original level of detail and avoid duplicating amounts. |
+| Source key names (`customerkey`...) in every layer | Be able to trace any column back to its origin. |
+| Amounts with a `_usd` suffix, local currency kept separate | The name tells you what can and can't be summed. |
+| Current age in `dim_customer`, age at purchase in `fct_sales` | They answer different questions: who the customer is today and who they were when they bought. |
+| Open store = no close date | The status field has inconsistencies. |
+| Marts as tables, staging as views | Staging is an intermediate step; marts are what gets queried. |
+| Original data left untouched | Problems are solved in dbt and documented. |
+| `stg_exchange` is kept even though it isn't used yet | It keeps the source available for a possible future currency analysis. |
 
-## Alcance
+## Scope
 
-| Incluye | Fuera del alcance |
+| Included | Out of scope |
 |---|---|
-| Transformación de las seis tablas originales | Cargas automáticas o periódicas |
-| Capa staging y esquema estrella | Modelos incrementales y snapshots |
-| Tests de calidad de datos | Orquestación |
-| Documentación y consultas de ejemplo | Dashboards o integración con BI |
+| Transformation of the six original tables | Automated or scheduled loads |
+| Staging layer and star schema | Incremental models and snapshots |
+| Data quality tests | Orchestration |
+| Documentation and example queries | Dashboards or BI integration |
 
+## Next steps
 
-## Próximos pasos
+- Repeat the exercise with a messier dataset, where an intermediate layer is needed to join tables with different grains.
+- Add a dashboard on top of `fct_sales` to close the loop all the way to consumption.
+- Try features left out here: incremental models, snapshots and scheduled runs.
 
-- Repetir el ejercicio con un dataset más desordenado, donde haga falta una capa intermedia para unir tablas con granos distintos.
-- Agregar un dashboard sobre `fct_sales` para cerrar el circuito hasta el consumo.
-- Probar funcionalidades que acá quedaron afuera: modelos incrementales, snapshots y ejecución programada.
+## How to run it
 
-## Cómo correrlo
-
-Requisitos: Python, PostgreSQL con el dataset Contoso cargado en el schema `public`, y dbt-postgres (usé dbt Core 1.13 y el adaptador postgres 1.11).
+Requirements: Python, PostgreSQL with the Contoso dataset loaded in the `public` schema, and dbt-postgres (I used dbt Core 1.13 and the postgres adapter 1.11).
 
 ```bash
 python -m venv .venv
@@ -193,22 +190,17 @@ dbt docs generate
 dbt docs serve
 ```
 
-- `dbt debug` verifica la conexión; `dbt build` construye todos los modelos y corre los tests; los dos últimos generan y abren la documentación.
-- La conexión se configura en `~/.dbt/profiles.yml` (host, puerto, base, usuario, contraseña y schema destino). El nombre del perfil tiene que coincidir con el de `dbt_project.yml`. Ese archivo tiene credenciales y no forma parte del repositorio.
+- `dbt debug` checks the connection; `dbt build` builds all models and runs the tests; the last two generate and open the documentation.
+- The connection is configured in `~/.dbt/profiles.yml` (host, port, database, user, password and target schema). The profile name must match the one in `dbt_project.yml`. That file contains credentials and is not part of the repository.
 
-
-## Estructura del repositorio
+## Repository structure
 
 ```
 models/
-  staging/     una vista por tabla original + _sources.yml (declara las fuentes)
-  marts/       la estrella (fct_sales y 4 dimensiones) + _marts.yml (tests y descripciones)
-tests/         tests escritos a mano (grano y reglas de negocio)
-analyses/      las consultas que responden las preguntas
-docs/          imágenes del README
+  staging/     one view per original table + _sources.yml (declares the sources)
+  marts/       the star (fct_sales and 4 dimensions) + _marts.yml (tests and descriptions)
+tests/         hand-written tests (grain and business rules)
+analyses/      the queries that answer the questions
+docs/          README images
 dbt_project.yml
 ```
-
----
-
-
