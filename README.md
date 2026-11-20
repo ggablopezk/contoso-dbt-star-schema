@@ -1,7 +1,6 @@
 # Ventas de Contoso: de tablas crudas a un esquema estrella con dbt
 
 
-
 Este es mi primer proyecto con **dbt**. Lo diseñé con un alcance acotado y sencillo a propósito. La idea no era construir algo complejo, sino entender los fundamentos de la herramienta y compararlos con mi forma habitual de trabajar.
 
 En mi trabajo como analista de datos armo y mantengo una base en PostgreSQL con vistas y vistas materializadas. Funciona, pero la lógica queda repartida entre distintas vistas y en lo que yo sé sobre cómo dependen unas de otras. Si un número sale mal, tengo que rastrear a mano qué vista alimenta a cuál. Las verificaciones las hago con consultas sueltas, sin nada que garantice que se corran siempre. Lo que quería ver con dbt es si ese mismo trabajo se puede hacer con más transparencia, más auditabilidad y más control sobre los errores.
@@ -60,9 +59,7 @@ Antes de escribir una línea, me senté a entender los datos. La primera pregunt
 Parece un detalle, pero es lo que evita el error más caro y más silencioso en datos: un JOIN que duplica filas e infla los totales sin que nadie lo note.
 
 
-
 Con eso dibujé la **estrella**: las ventas en el centro (los *hechos*, lo que se mide y se suma) y alrededor las *dimensiones*, que describen el quién, qué, dónde y cuándo. Cada venta tiene un cliente, un producto, una tienda y una fecha; cada cliente, producto, tienda o fecha puede aparecer en muchas ventas.
-
 
 
 ```mermaid
@@ -120,9 +117,9 @@ Acá está la diferencia más grande con mi forma de trabajar habitual. Las comp
 | Tipo de control | Qué verifica |
 |---|---|
 | Unicidad | Que no se repitan las claves de las dimensiones ni las líneas de pedido. |
-| Completitud | Que las claves no estén vacías. |
+| Completitud | Que las claves de las dimensiones y de cada línea de pedido no estén vacías. |
 | Integridad | Que cada venta apunte a un cliente, producto, tienda y fecha que existan. |
-| Reglas de negocio | Que el precio con descuento nunca supere al de lista, que no haya ventas después del cierre de una tienda y que nada se entregue antes de pedirse. |
+| Reglas de negocio | Que el precio con descuento nunca supere al de lista, que no haya ventas fuera del período en que la tienda estuvo abierta y que nada se entregue antes de pedirse. |
 
 ### 7. Documentación
 
@@ -135,9 +132,9 @@ Para probar que la estrella sirve, respondí las cuatro preguntas del escenario 
 | Pregunta | Cómo la medí | Resultado |
 |---|---|---|
 | Ventas por país y año | Venta neta en USD, por país de la tienda | Estados Unidos lidera entre las tiendas físicas, pero desde 2021 la tienda **online** es el canal que más vende (en 2022 facturó más del doble que Estados Unidos). Todos los países caen en 2020. |
-| Categorías con más ganancia | (Precio con descuento − costo) × cantidad, en USD | **Computers** deja casi la mitad de la ganancia total (USD 50,2 M de 114 M). El margen es parecido en todas las categorías (52% a 59%): la diferencia la hace el volumen, no el margen. |
+| Categorías con más ganancia | (Precio con descuento − costo) × cantidad, en USD | **Computers** deja el 44% de la ganancia total (USD 50,2 M de 114 M). El margen es parecido en todas las categorías (52% a 59%): la diferencia la hace el volumen, no el margen. |
 | Plata resignada en descuentos | Venta a precio de lista − venta neta, en USD y como proporción | USD 12,95 M en total. El descuento se mantiene estable en torno al **6%** de la venta a precio de lista todos los años. |
-| Rango de edad que más compra | Venta neta en USD y clientes distintos, según la edad al comprar | "+66" aparece primero, pero es el único rango abierto y abarca muchos más años que los demás. Comparando rangos del mismo ancho (8 años), las ventas son casi iguales (unos USD 24 M cada uno): **ninguna edad se destaca**. |
+| Rango de edad que más compra | Venta neta en USD y clientes distintos, según la edad al comprar | "+66" aparece primero, pero es el único rango abierto y abarca muchos más años que los demás. Comparando rangos del mismo ancho (8 años), las ventas son parecidas (entre USD 20 M y 25 M cada uno): **ninguna edad se destaca**. |
 
 Dos cosas que aparecieron al responderlas:
 
@@ -148,7 +145,7 @@ Dos cosas que aparecieron al responderlas:
 
 - Una capa staging que estandariza las seis tablas originales.
 - Un esquema estrella con una tabla de hechos y cuatro dimensiones.
-- 18 tests automáticos de unicidad, integridad y reglas de negocio.
+- 18 tests automáticos de unicidad, completitud, integridad y reglas de negocio.
 - Documentación de modelos y columnas, con el grafo de dependencias.
 - Cuatro consultas que responden preguntas de negocio usando solo la estrella.
 - Todo versionado con Git.
@@ -178,7 +175,7 @@ Dos cosas que aparecieron al responderlas:
 
 ## Próximos pasos
 
-- Repetir el ejercicio con un dataset más desordenado (por ejemplo, Olist), donde haga falta una capa intermedia para unir tablas con granos distintos.
+- Repetir el ejercicio con un dataset más desordenado, donde haga falta una capa intermedia para unir tablas con granos distintos.
 - Agregar un dashboard sobre `fct_sales` para cerrar el circuito hasta el consumo.
 - Probar funcionalidades que acá quedaron afuera: modelos incrementales, snapshots y ejecución programada.
 
@@ -206,7 +203,7 @@ dbt docs serve
 models/
   staging/     una vista por tabla original + _sources.yml (declara las fuentes)
   marts/       la estrella (fct_sales y 4 dimensiones) + _marts.yml (tests y descripciones)
-tests/         tests escritos a mano (reglas de negocio)
+tests/         tests escritos a mano (grano y reglas de negocio)
 analyses/      las consultas que responden las preguntas
 docs/          imágenes del README
 dbt_project.yml
